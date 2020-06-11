@@ -25,6 +25,7 @@
 #include "distributed/multi_physical_planner.h"
 #include "distributed/listutils.h"
 #include "distributed/metadata_cache.h"
+#include "distributed/multi_explain.h"
 #include "distributed/multi_router_planner.h"
 #include "distributed/local_executor.h"
 #include "distributed/distributed_planner.h"
@@ -121,6 +122,7 @@ static TupleTableSlot *
 CoordinatorInsertSelectExecScanInternal(CustomScanState *node)
 {
 	CitusScanState *scanState = (CitusScanState *) node;
+	bool requestedForExplainAnalyze = RequestedForExplainAnalyze(scanState);
 
 	if (!scanState->finishedRemoteScan)
 	{
@@ -300,6 +302,15 @@ CoordinatorInsertSelectExecScanInternal(CustomScanState *node)
 			scanState->tuplestorestate =
 				tuplestore_begin_heap(randomAccess, interTransactions, work_mem);
 			TupleDesc tupleDescriptor = ScanStateGetTupleDescriptor(scanState);
+
+			if (requestedForExplainAnalyze)
+			{
+				TupleDestination *defaultTupleDest = CreateTupleStoreTupleDest(
+					scanState->tuplestorestate, tupleDescriptor);
+				taskList = ExplainAnalyzeTaskList(taskList, defaultTupleDest,
+												  tupleDescriptor, NULL);
+			}
+
 			uint64 rowsInserted = ExecuteTaskListIntoTupleStore(ROW_MODIFY_COMMUTATIVE,
 																taskList, tupleDescriptor,
 																scanState->tuplestorestate,
@@ -362,6 +373,16 @@ CoordinatorInsertSelectExecScanInternal(CustomScanState *node)
 					tuplestore_begin_heap(randomAccess, interTransactions, work_mem);
 
 				TupleDesc tupleDescriptor = ScanStateGetTupleDescriptor(scanState);
+
+				if (requestedForExplainAnalyze)
+				{
+					TupleDestination *defaultTupleDest = CreateTupleStoreTupleDest(
+						scanState->tuplestorestate, tupleDescriptor);
+					prunedTaskList = ExplainAnalyzeTaskList(prunedTaskList,
+															defaultTupleDest,
+															tupleDescriptor, NULL);
+				}
+
 				ExecuteTaskListIntoTupleStore(ROW_MODIFY_COMMUTATIVE, prunedTaskList,
 											  tupleDescriptor, scanState->tuplestorestate,
 											  hasReturning);
