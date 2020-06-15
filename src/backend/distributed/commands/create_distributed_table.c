@@ -12,6 +12,7 @@
 #include "miscadmin.h"
 
 #include "distributed/pg_version_constants.h"
+#include "distributed/commands/utility_hook.h"
 
 #include "access/genam.h"
 #include "access/hash.h"
@@ -33,6 +34,7 @@
 #include "catalog/pg_trigger.h"
 #include "commands/defrem.h"
 #include "commands/extension.h"
+#include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "distributed/commands/multi_copy.h"
 #include "distributed/citus_ruleutils.h"
@@ -42,6 +44,7 @@
 #include "distributed/listutils.h"
 #include "distributed/metadata_utility.h"
 #include "distributed/coordinator_protocol.h"
+#include "distributed/metadata/distobject.h"
 #include "distributed/metadata_cache.h"
 #include "distributed/metadata_sync.h"
 #include "distributed/multi_executor.h"
@@ -124,6 +127,7 @@ static void DoCopyFromLocalTableIntoShards(Relation distributedRelation,
 PG_FUNCTION_INFO_V1(master_create_distributed_table);
 PG_FUNCTION_INFO_V1(create_distributed_table);
 PG_FUNCTION_INFO_V1(create_reference_table);
+PG_FUNCTION_INFO_V1(undistribute_table);
 
 
 /*
@@ -322,6 +326,53 @@ EnsureCitusTableCanBeCreated(Oid relationOid)
 	 * will be performed in CreateDistributedTable.
 	 */
 	EnsureRelationKindSupported(relationOid);
+}
+
+
+/*
+ * undistribute_table gets a distributed table name and 
+ * udistributes the table.
+ */
+Datum
+undistribute_table(PG_FUNCTION_ARGS)
+{
+	CheckCitusVersion(ERROR);
+	EnsureCoordinator();
+
+	Oid relationId = PG_GETARG_OID(0);
+	const char *relationName = get_rel_name(relationId);
+
+	EnsureTableOwner(relationId);
+
+	StringInfo query = makeStringInfo();
+
+	SPI_connect();
+
+	appendStringInfo(query, "CREATE TABLE tmp1 (LIKE %s INCLUDING ALL)", relationName);
+	SPI_execute(query->data, false, 0);
+
+	resetStringInfo(query);
+	appendStringInfo(query, "INSERT INTO tmp1 SELECT * FROM %s", relationName);
+	SPI_execute(query->data, false, 0);
+
+	SPI_finish();
+
+	ObjectAddress undisTable;
+
+	undisTable.classId = RelationRelationId;
+	undisTable.objectId = relationId;
+	undisTable.objectSubId = 0;
+
+	DirectFunctionCall3(master_drop_all_shards,
+						ObjectIdGetDatum(relationId),
+						CStringGetTextDatum(relationName),
+						CStringGetTextDatum("public"));
+	DeletePartitionRow(relationId);
+	performDeletion(&undisTable, 0, 0);
+
+	RenameRelationInternal(get_relname_relid("tmp1", get_namespace_oid("public", false)), relationName, false, false);
+
+	PG_RETURN_BOOL(true);
 }
 
 
