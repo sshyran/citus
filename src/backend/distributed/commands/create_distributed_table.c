@@ -344,33 +344,52 @@ undistribute_table(PG_FUNCTION_ARGS)
 
 	EnsureTableOwner(relationId);
 
+	Relation relation = relation_open(relationId, ExclusiveLock);
+
 	StringInfo query = makeStringInfo();
 
 	SPI_connect();
 
-	appendStringInfo(query, "CREATE TABLE tmp1 (LIKE %s INCLUDING ALL)", relationName);
-	SPI_execute(query->data, false, 0);
+	List * tableDDLEvents = GetTableDDLEvents(relationId, true);
+	char * createTableQuery = linitial(tableDDLEvents);
+	list_delete_first(tableDDLEvents);
+
+	Node *parseTree = ParseTreeNode(createTableQuery);
+
+	((CreateStmt *)parseTree)->relation->relname = "tmp1";
+
+	CitusProcessUtility(parseTree, createTableQuery, PROCESS_UTILITY_TOPLEVEL, NULL, None_Receiver, NULL);
 
 	resetStringInfo(query);
 	appendStringInfo(query, "INSERT INTO tmp1 SELECT * FROM %s", relationName);
 	SPI_execute(query->data, false, 0);
 
-	SPI_finish();
+	ObjectAddress undistributeTableAddres;
 
-	ObjectAddress undisTable;
-
-	undisTable.classId = RelationRelationId;
-	undisTable.objectId = relationId;
-	undisTable.objectSubId = 0;
+	undistributeTableAddres.classId = RelationRelationId;
+	undistributeTableAddres.objectId = relationId;
+	undistributeTableAddres.objectSubId = 0;
 
 	DirectFunctionCall3(master_drop_all_shards,
 						ObjectIdGetDatum(relationId),
 						CStringGetTextDatum(relationName),
 						CStringGetTextDatum("public"));
 	DeletePartitionRow(relationId);
-	performDeletion(&undisTable, 0, 0);
+
+	relation_close(relation, ExclusiveLock);
+
+	performDeletion(&undistributeTableAddres, 0, 0);
 
 	RenameRelationInternal(get_relname_relid("tmp1", get_namespace_oid("public", false)), relationName, false, false);
+
+	char * ddl = NULL;
+
+	foreach_ptr(ddl, tableDDLEvents)
+	{
+		SPI_execute(ddl, false, 0);
+	}
+
+	SPI_finish();
 
 	PG_RETURN_BOOL(true);
 }
