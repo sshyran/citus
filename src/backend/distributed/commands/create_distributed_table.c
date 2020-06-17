@@ -346,6 +346,16 @@ undistribute_table(PG_FUNCTION_ARGS)
 
 	Relation relation = relation_open(relationId, ExclusiveLock);
 
+	if (TableReferencing(relationId))
+	{
+		ereport(ERROR, (errmsg("Cannot undistribute table because it has a foreign key.")));
+	}
+
+	if (TableReferenced(relationId))
+	{
+		ereport(ERROR, (errmsg("Cannot undistribute table because a foreign key references to it.")));
+	}
+
 	StringInfo query = makeStringInfo();
 
 	SPI_connect();
