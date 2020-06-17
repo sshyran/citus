@@ -30,20 +30,20 @@
 static bool IsVariableExpression(Node *node);
 static Expr * citus_evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 								  Oid result_collation,
-								  MasterEvaluationContext *masterEvaluationContext);
+								  CoordinatorEvaluationContext *
+								  coordinatorEvaluationContext);
 static bool CitusIsVolatileFunctionIdChecker(Oid func_id, void *context);
 static bool CitusIsMutableFunctionIdChecker(Oid func_id, void *context);
 static bool ShouldEvaluateExpression(Expr *expression);
-static bool ShouldEvaluateFunctionWithMasterContext(MasterEvaluationContext *
-													evaluationContext);
+static bool ShouldEvaluateFunctions(CoordinatorEvaluationContext *evaluationContext);
 
 /*
- * RequiresMasterEvaluation returns the executor needs to reparse and
+ * RequiresCoordinatorEvaluation returns the executor needs to reparse and
  * try to execute this query, which is the case if the query contains
  * any stable or volatile function.
  */
 bool
-RequiresMasterEvaluation(Query *query)
+RequiresCoordinatorEvaluation(Query *query)
 {
 	if (query->commandType == CMD_SELECT && !query->hasModifyingCTE)
 	{
@@ -55,25 +55,25 @@ RequiresMasterEvaluation(Query *query)
 
 
 /*
- * ExecuteMasterEvaluableExpressions evaluates expressions and parameters
+ * ExecuteCoordinatorEvaluableExpressions evaluates expressions and parameters
  * that can be resolved to a constant.
  */
 void
-ExecuteMasterEvaluableExpressions(Query *query, PlanState *planState)
+ExecuteCoordinatorEvaluableExpressions(Query *query, PlanState *planState)
 {
-	MasterEvaluationContext masterEvaluationContext;
+	CoordinatorEvaluationContext coordinatorEvaluationContext;
 
-	masterEvaluationContext.planState = planState;
+	coordinatorEvaluationContext.planState = planState;
 	if (query->commandType == CMD_SELECT)
 	{
-		masterEvaluationContext.evaluationMode = EVALUATE_PARAMS;
+		coordinatorEvaluationContext.evaluationMode = EVALUATE_PARAMS;
 	}
 	else
 	{
-		masterEvaluationContext.evaluationMode = EVALUATE_FUNCTIONS_PARAMS;
+		coordinatorEvaluationContext.evaluationMode = EVALUATE_FUNCTIONS_PARAMS;
 	}
 
-	PartiallyEvaluateExpression((Node *) query, &masterEvaluationContext);
+	PartiallyEvaluateExpression((Node *) query, &coordinatorEvaluationContext);
 }
 
 
@@ -85,7 +85,7 @@ ExecuteMasterEvaluableExpressions(Query *query, PlanState *planState)
  */
 Node *
 PartiallyEvaluateExpression(Node *expression,
-							MasterEvaluationContext *masterEvaluationContext)
+							CoordinatorEvaluationContext *coordinatorEvaluationContext)
 {
 	if (expression == NULL || IsA(expression, Const))
 	{
@@ -106,10 +106,10 @@ PartiallyEvaluateExpression(Node *expression,
 											exprType(expression),
 											exprTypmod(expression),
 											exprCollation(expression),
-											masterEvaluationContext);
+											coordinatorEvaluationContext);
 	}
 	else if (ShouldEvaluateExpression((Expr *) expression) &&
-			 ShouldEvaluateFunctionWithMasterContext(masterEvaluationContext))
+			 ShouldEvaluateFunctions(coordinatorEvaluationContext))
 	{
 		if (FindNodeCheck(expression, IsVariableExpression))
 		{
@@ -126,19 +126,19 @@ PartiallyEvaluateExpression(Node *expression,
 			 */
 			return (Node *) expression_tree_mutator(expression,
 													PartiallyEvaluateExpression,
-													masterEvaluationContext);
+													coordinatorEvaluationContext);
 		}
 
 		return (Node *) citus_evaluate_expr((Expr *) expression,
 											exprType(expression),
 											exprTypmod(expression),
 											exprCollation(expression),
-											masterEvaluationContext);
+											coordinatorEvaluationContext);
 	}
 	else if (nodeTag == T_Query)
 	{
 		Query *query = (Query *) expression;
-		MasterEvaluationContext subContext = *masterEvaluationContext;
+		CoordinatorEvaluationContext subContext = *coordinatorEvaluationContext;
 		if (query->commandType != CMD_SELECT)
 		{
 			/*
@@ -159,7 +159,7 @@ PartiallyEvaluateExpression(Node *expression,
 	{
 		return (Node *) expression_tree_mutator(expression,
 												PartiallyEvaluateExpression,
-												masterEvaluationContext);
+												coordinatorEvaluationContext);
 	}
 
 	return expression;
@@ -167,12 +167,12 @@ PartiallyEvaluateExpression(Node *expression,
 
 
 /*
- * ShouldEvaluateFunctionWithMasterContext is a helper function which is used to
+ * ShouldEvaluateFunctions is a helper function which is used to
  * decide whether the function/expression should be evaluated with the input
- * masterEvaluationContext.
+ * coordinatorEvaluationContext.
  */
 static bool
-ShouldEvaluateFunctionWithMasterContext(MasterEvaluationContext *evaluationContext)
+ShouldEvaluateFunctions(CoordinatorEvaluationContext *evaluationContext)
 {
 	if (evaluationContext == NULL)
 	{
@@ -263,7 +263,7 @@ IsVariableExpression(Node *node)
 static Expr *
 citus_evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 					Oid result_collation,
-					MasterEvaluationContext *masterEvaluationContext)
+					CoordinatorEvaluationContext *coordinatorEvaluationContext)
 {
 	PlanState *planState = NULL;
 	EState     *estate;
@@ -274,19 +274,19 @@ citus_evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 	int16		resultTypLen;
 	bool		resultTypByVal;
 
-	if (masterEvaluationContext)
+	if (coordinatorEvaluationContext)
 	{
-		planState = masterEvaluationContext->planState;
+		planState = coordinatorEvaluationContext->planState;
 
 		if (IsA(expr, Param))
 		{
-			if (masterEvaluationContext->evaluationMode == EVALUATE_NONE)
+			if (coordinatorEvaluationContext->evaluationMode == EVALUATE_NONE)
 			{
 				/* bail out, the caller doesn't want params to be evaluated  */
 				return expr;
 			}
 		}
-		else if (masterEvaluationContext->evaluationMode != EVALUATE_FUNCTIONS_PARAMS)
+		else if (coordinatorEvaluationContext->evaluationMode != EVALUATE_FUNCTIONS_PARAMS)
 		{
 			/* should only get here for node types we should evaluate */
 			Assert(ShouldEvaluateExpression(expr));

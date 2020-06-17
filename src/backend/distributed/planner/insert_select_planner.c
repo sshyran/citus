@@ -296,7 +296,8 @@ CreateDistributedInsertSelectPlan(Query *originalQuery,
 	workerJob->dependentJobList = NIL;
 	workerJob->jobId = jobId;
 	workerJob->jobQuery = originalQuery;
-	workerJob->requiresMasterEvaluation = RequiresMasterEvaluation(originalQuery);
+	workerJob->requiresCoordinatorEvaluation =
+		RequiresCoordinatorEvaluation(originalQuery);
 
 	/* and finally the multi plan */
 	distributedPlan->workerJob = workerJob;
