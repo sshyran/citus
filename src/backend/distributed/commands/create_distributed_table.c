@@ -330,7 +330,7 @@ EnsureCitusTableCanBeCreated(Oid relationOid)
 
 
 /*
- * undistribute_table gets a distributed table name and 
+ * undistribute_table gets a distributed table name and
  * udistributes the table.
  */
 Datum
@@ -348,27 +348,30 @@ undistribute_table(PG_FUNCTION_ARGS)
 
 	if (TableReferencing(relationId))
 	{
-		ereport(ERROR, (errmsg("Cannot undistribute table because it has a foreign key.")));
+		ereport(ERROR, (errmsg("Cannot undistribute table "
+							   "because it has a foreign key.")));
 	}
 
 	if (TableReferenced(relationId))
 	{
-		ereport(ERROR, (errmsg("Cannot undistribute table because a foreign key references to it.")));
+		ereport(ERROR, (errmsg("Cannot undistribute table "
+							   "because a foreign key references to it.")));
 	}
 
 	StringInfo query = makeStringInfo();
 
 	SPI_connect();
 
-	List * tableDDLEvents = GetTableDDLEvents(relationId, true);
-	char * createTableQuery = linitial(tableDDLEvents);
+	List *tableDDLEvents = GetTableDDLEvents(relationId, true);
+	char *createTableQuery = linitial(tableDDLEvents);
 	list_delete_first(tableDDLEvents);
 
 	Node *parseTree = ParseTreeNode(createTableQuery);
 
-	((CreateStmt *)parseTree)->relation->relname = "tmp1";
+	((CreateStmt *) parseTree)->relation->relname = "tmp1";
 
-	CitusProcessUtility(parseTree, createTableQuery, PROCESS_UTILITY_TOPLEVEL, NULL, None_Receiver, NULL);
+	CitusProcessUtility(parseTree, createTableQuery, PROCESS_UTILITY_TOPLEVEL, NULL,
+						None_Receiver, NULL);
 
 	resetStringInfo(query);
 	appendStringInfo(query, "INSERT INTO tmp1 SELECT * FROM %s", relationName);
@@ -390,9 +393,15 @@ undistribute_table(PG_FUNCTION_ARGS)
 
 	performDeletion(&undistributeTableAddres, 0, 0);
 
-	RenameRelationInternal(get_relname_relid("tmp1", get_namespace_oid("public", false)), relationName, false, false);
+#if PG_VERSION_NUM >= PG_VERSION_12
+	RenameRelationInternal(get_relname_relid("tmp1", get_namespace_oid("public", false)),
+						   relationName, false, false);
+#else
+	RenameRelationInternal(get_relname_relid("tmp1", get_namespace_oid("public", false)),
+						   relationName, false);
+#endif
 
-	char * ddl = NULL;
+	char *ddl = NULL;
 
 	foreach_ptr(ddl, tableDDLEvents)
 	{
