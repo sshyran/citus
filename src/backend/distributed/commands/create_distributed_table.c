@@ -40,6 +40,7 @@
 #include "distributed/citus_ruleutils.h"
 #include "distributed/colocation_utils.h"
 #include "distributed/commands.h"
+#include "distributed/deparser.h"
 #include "distributed/distribution_column.h"
 #include "distributed/listutils.h"
 #include "distributed/metadata_utility.h"
@@ -122,6 +123,7 @@ static void DoCopyFromLocalTableIntoShards(Relation distributedRelation,
 										   DestReceiver *copyDest,
 										   TupleTableSlot *slot,
 										   EState *estate);
+static void CreateTemporaryTableName(StringInfo *tempName, const char *tableName);
 
 /* exports for SQL callable functions */
 PG_FUNCTION_INFO_V1(master_create_distributed_table);
@@ -340,11 +342,15 @@ undistribute_table(PG_FUNCTION_ARGS)
 	EnsureCoordinator();
 
 	Oid relationId = PG_GETARG_OID(0);
-	const char *relationName = get_rel_name(relationId);
 
 	EnsureTableOwner(relationId);
-
 	Relation relation = relation_open(relationId, ExclusiveLock);
+
+	const char *relationName = get_rel_name(relationId);
+
+	Oid schemaId = get_rel_namespace(relationId);
+	const char *schemaName = get_namespace_name(schemaId);
+
 
 	if (TableReferencing(relationId))
 	{
@@ -362,19 +368,44 @@ undistribute_table(PG_FUNCTION_ARGS)
 
 	SPI_connect();
 
-	List *tableDDLEvents = GetTableDDLEvents(relationId, true);
-	char *createTableQuery = linitial(tableDDLEvents);
-	list_delete_first(tableDDLEvents);
+	List *tableCommands = GetTableDDLEventsExceptCreation(relationId);
+	List *createTableCommands = GetTableCreationCommands(relationId, true);
 
-	Node *parseTree = ParseTreeNode(createTableQuery);
 
-	((CreateStmt *) parseTree)->relation->relname = "tmp1";
+	StringInfo tempName = makeStringInfo();
+	CreateTemporaryTableName(&tempName, relationName);
 
-	CitusProcessUtility(parseTree, createTableQuery, PROCESS_UTILITY_TOPLEVEL, NULL,
-						None_Receiver, NULL);
+	char *createTableQuery = NULL;
+	foreach_ptr(createTableQuery, createTableCommands)
+	{
+		Node *parseTree = ParseTreeNode(createTableQuery);
+
+		if (nodeTag(parseTree) == T_CreateStmt)
+		{
+			((CreateStmt *) parseTree)->relation->relname = tempName->data;
+		}
+		else if (nodeTag(parseTree) == T_AlterOwnerStmt)
+		{
+			((AlterOwnerStmt *) parseTree)->relation->relname = tempName->data;
+		}
+		else if (nodeTag(parseTree) == T_AlterTableStmt)
+		{
+			((AlterTableStmt *) parseTree)->relation->relname = tempName->data;
+		}
+		else
+		{
+			continue;
+		}
+
+		CitusProcessUtility(parseTree, createTableQuery, PROCESS_UTILITY_TOPLEVEL, NULL,
+							None_Receiver, NULL);
+		break;
+	}
 
 	resetStringInfo(query);
-	appendStringInfo(query, "INSERT INTO tmp1 SELECT * FROM %s", relationName);
+	appendStringInfo(query, "INSERT INTO %s SELECT * FROM %s",
+					 quote_qualified_identifier(schemaName, tempName->data),
+					 quote_qualified_identifier(schemaName, relationName));
 	SPI_execute(query->data, false, 0);
 
 	ObjectAddress undistributeTableAddres;
@@ -386,24 +417,24 @@ undistribute_table(PG_FUNCTION_ARGS)
 	DirectFunctionCall3(master_drop_all_shards,
 						ObjectIdGetDatum(relationId),
 						CStringGetTextDatum(relationName),
-						CStringGetTextDatum("public"));
+						CStringGetTextDatum(schemaName));
 	DeletePartitionRow(relationId);
 
-	relation_close(relation, ExclusiveLock);
+	relation_close(relation, NoLock);
 
 	performDeletion(&undistributeTableAddres, 0, 0);
 
 #if PG_VERSION_NUM >= PG_VERSION_12
-	RenameRelationInternal(get_relname_relid("tmp1", get_namespace_oid("public", false)),
+	RenameRelationInternal(get_relname_relid(tempName->data, schemaId),
 						   relationName, false, false);
 #else
-	RenameRelationInternal(get_relname_relid("tmp1", get_namespace_oid("public", false)),
+	RenameRelationInternal(get_relname_relid(tempName->data, schemaId),
 						   relationName, false);
 #endif
 
 	char *ddl = NULL;
 
-	foreach_ptr(ddl, tableDDLEvents)
+	foreach_ptr(ddl, tableCommands)
 	{
 		SPI_execute(ddl, false, 0);
 	}
@@ -1590,4 +1621,20 @@ RelationUsesHeapAccessMethodOrNone(Relation relation)
 #else
 	return true;
 #endif
+}
+
+
+/*
+ * CreateTemporaryTableName creates a temporary table name for undistributing
+ * a table, using the hash of the table name.
+ */
+static void
+CreateTemporaryTableName(StringInfo *tempName, const char *tableName)
+{
+	char hashString[8];
+	uint32 hashOfName = hash_any((unsigned char *) tableName, strlen(tableName));
+
+	SafeSnprintf(hashString, 8, "%.8x", hashOfName);
+
+	appendStringInfo(*tempName, "tmp_%s", hashString);
 }

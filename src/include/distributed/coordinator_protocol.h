@@ -101,6 +101,7 @@ extern uint64 GetNextShardId(void);
 extern uint64 GetNextPlacementId(void);
 extern Oid ResolveRelationId(text *relationName, bool missingOk);
 extern List * GetTableDDLEvents(Oid relationId, bool forShardCreation);
+extern List * GetTableDDLEventsExceptCreation(Oid relationId);
 extern List * GetTableCreationCommands(Oid relationId, bool forShardCreation);
 extern List * GetTableIndexAndConstraintCommands(Oid relationId);
 extern bool IndexImpliedByAConstraint(Form_pg_index indexForm);
