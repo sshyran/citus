@@ -130,6 +130,15 @@ ALTER EXTENSION citus UPDATE TO '9.2-4';
  */
 ALTER EXTENSION citus UPDATE TO '9.3-1';
 ALTER EXTENSION citus UPDATE TO '9.3-2';
+
+-- downgrade path from 9.3-2 to 9.2-2
+ALTER EXTENSION citus UPDATE TO '9.2-2';
+ALTER EXTENSION citus UPDATE TO '9.3-2';
+
+ALTER EXTENSION citus UPDATE TO '9.4-1';
+
+-- downgrade path from 9.4-1 to 9.3-2
+ALTER EXTENSION citus UPDATE TO '9.3-2';
 ALTER EXTENSION citus UPDATE TO '9.4-1';
 
 -- show running version
