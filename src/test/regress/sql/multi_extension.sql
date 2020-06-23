@@ -36,6 +36,38 @@ $$;
 $definition$ create_function_test_maintenance_worker
 \gset
 
+CREATE TABLE prev_objects(description text);
+CREATE TABLE extension_diff(previous_object text, current_object text);
+
+CREATE FUNCTION print_extension_changes()
+RETURNS TABLE(previous_object text, current_object text)
+AS $func$
+BEGIN
+	TRUNCATE TABLE extension_diff;
+
+	CREATE TABLE current_objects AS
+	SELECT pg_catalog.pg_describe_object(classid, objid, 0) AS description
+	FROM pg_catalog.pg_depend, pg_catalog.pg_extension e
+	WHERE refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+		AND refobjid = e.oid
+		AND deptype = 'e'
+		AND e.extname='citus'
+	ORDER BY 1;
+
+	INSERT INTO extension_diff
+	SELECT p.description previous_object, c.description current_object
+	FROM current_objects c FULL JOIN prev_objects p
+	ON p.description = c.description
+	WHERE p.description is null OR c.description is null
+	ORDER BY 1,2;
+
+	DROP TABLE prev_objects;
+	ALTER TABLE current_objects RENAME TO prev_objects;
+
+	RETURN QUERY TABLE extension_diff;
+END
+$func$ LANGUAGE plpgsql;
+
 CREATE SCHEMA test;
 :create_function_test_maintenance_worker
 
@@ -130,16 +162,26 @@ ALTER EXTENSION citus UPDATE TO '9.2-4';
  */
 ALTER EXTENSION citus UPDATE TO '9.3-1';
 ALTER EXTENSION citus UPDATE TO '9.3-2';
+SELECT * FROM print_extension_changes();
 
 -- downgrade path from 9.3-2 to 9.2-2
 ALTER EXTENSION citus UPDATE TO '9.2-2';
+SELECT * FROM print_extension_changes();
+
 ALTER EXTENSION citus UPDATE TO '9.3-2';
+SELECT * FROM print_extension_changes();
 
 ALTER EXTENSION citus UPDATE TO '9.4-1';
+SELECT * FROM print_extension_changes();
 
 -- downgrade path from 9.4-1 to 9.3-2
 ALTER EXTENSION citus UPDATE TO '9.3-2';
+SELECT * FROM print_extension_changes();
+
 ALTER EXTENSION citus UPDATE TO '9.4-1';
+SELECT * FROM print_extension_changes();
+
+DROP TABLE prev_objects, extension_diff;
 
 -- show running version
 SHOW citus.version;
