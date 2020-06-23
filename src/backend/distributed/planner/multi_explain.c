@@ -312,8 +312,7 @@ ExplainSubPlans(DistributedPlan *distributedPlan, ExplainState *es)
 
 		INSTR_TIME_SET_ZERO(planduration);
 
-		ExplainOnePlanCompat(plan, into, es, queryString, params, NULL, &planduration,
-							 NULL);
+		ExplainOnePlanCompat(plan, into, es, queryString, params, NULL, &planduration);
 
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
@@ -1066,7 +1065,7 @@ CitusExplainOneQuery(Query *query, int cursorOptions, IntoClause *into,
 
 	/* run it (if needed) and produce output */
 	ExplainOnePlanCompat(plan, into, es, queryString, params, queryEnv,
-						 &planduration, NULL);
+						 &planduration);
 }
 
 
@@ -1356,7 +1355,7 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		/* run it (if needed) and produce output */
 		ExplainOnePlanCompat(plan, into, es, queryString, params, queryEnv,
-					   &planduration, NULL);
+					   &planduration);
 	}
 }
 

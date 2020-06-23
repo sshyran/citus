@@ -296,7 +296,7 @@ BuildSelectStatementViaStdPlanner(Query *masterQuery, List *masterTargetList,
 		ReplaceCitusExtraDataContainer = true;
 		ReplaceCitusExtraDataContainerWithCustomScan = remoteScan;
 
-		standardStmt = standard_planner_compat(masterQuery, NULL, 0, NULL);
+		standardStmt = standard_planner_compat(masterQuery, 0, NULL);
 
 		ReplaceCitusExtraDataContainer = false;
 		ReplaceCitusExtraDataContainerWithCustomScan = NULL;
